@@ -78,8 +78,14 @@ def _build_canonical_request(
     All header names must be lowercase in the canonical request.
     """
     # 1. Canonical Query String
+    # Exclude X-Goog-Signature from canonical query (it's added after signing)
+    # Also exclude X-Goog-SignedHeaders as per V4 spec
+    canonical_params = {
+        k: v for k, v in query_parameters.items() 
+        if k not in ("X-Goog-Signature", "X-Goog-SignedHeaders")
+    }
     canonical_query = "&".join(
-        f"{quote(k)}={quote_plus(str(v))}" for k, v in sorted(query_parameters.items())
+        f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in sorted(canonical_params.items())
     )
 
     # 2. Canonical Headers (lowercase keys, sorted)
@@ -89,7 +95,8 @@ def _build_canonical_request(
         v = headers[k].strip()
         k_lower = k.lower()
         signed_headers.append(k_lower)
-        header_lines.append(f"{k_lower}:{v}")  # ← LOWERCASE KEY
+        # Format: lowercase_key:value (no space after colon, value stripped)
+        header_lines.append(f"{k_lower}:{v}")
 
     canonical_headers = "\n".join(header_lines)
     signed_headers_str = ";".join(signed_headers)
@@ -101,7 +108,7 @@ def _build_canonical_request(
         f"{method}\n"
         f"{path}\n"
         f"{canonical_query}\n"
-        f"{canonical_headers}\n"  # ← No .rstrip() — clean line
+        f"{canonical_headers}\n"
         f"{signed_headers_str}\n"
         f"{payload_hash}"
     )
