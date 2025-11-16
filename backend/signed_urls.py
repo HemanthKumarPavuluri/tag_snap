@@ -153,9 +153,10 @@ def generate_signed_url_iam(
     }
     
     # Canonical request
+    # Note: Headers must be lowercase for canonical request
     path = f"/{blob_name}"
     headers = {
-        "Content-Type": content_type,
+        "content-type": content_type,
         "host": f"{bucket_name}.storage.googleapis.com",
     }
     
