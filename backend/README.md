@@ -6,48 +6,76 @@ This small backend exposes a FastAPI endpoint that returns V4 signed PUT URLs fo
 - Request JSON: `{ "filename": "optional-name.jpg", "content_type": "image/jpeg", "expires_minutes": 15 }`
 - Response: `{ url, method: "PUT", blob_name, content_type, expires_at }`
 
-## Two Implementation Approaches
+## Implementation: Enterprise Keyless Signing ✅ WORKING
 
-### Approach 1: Private Key in Secret (Recommended) ✅ WORKING
-Uses the service account's private key mounted as a Cloud Secret. Most reliable and straightforward.
+The current implementation uses **enterprise-grade keyless signing** via Google's IAM Credentials API:
+
+**Security Benefits:**
+- ✓ No private keys in memory or on disk
+- ✓ Keys remain in Google's Hardware Security Modules (HSM)
+- ✓ Full audit trail of all signing operations
+- ✓ Instant revocation via IAM role changes
+- ✓ Zero key rotation overhead
+
+**How It Works:**
+1. Backend calls IAM Credentials `signBlob` API
+2. Payload (string-to-sign) is sent base64-encoded
+3. Google signs the payload with the service account's key (never exposed)
+4. Signature returned as base64, decoded to bytes, then hex-encoded for URL
+5. Final signed URL ready for client uploads
 
 **Setup:**
-1. Create a service account key:
+1. Create service account for signing:
    ```bash
-   gcloud iam service-accounts keys create sa-key.json \
-     --iam-account=signed-url@storied-catwalk-476608-d1.iam.gserviceaccount.com
+   gcloud iam service-accounts create signed-url
    ```
 
-2. Create Cloud Secret:
+2. Grant necessary roles:
    ```bash
-   gcloud secrets create signed-url-sa-key --data-file=sa-key.json
+   # Allow signing operations
+   gcloud iam service-accounts add-iam-policy-binding \
+     signed-url@PROJECT_ID.iam.gserviceaccount.com \
+     --member=serviceAccount:signed-url@PROJECT_ID.iam.gserviceaccount.com \
+     --role=roles/iam.serviceAccountTokenCreator
+   
+   # Allow bucket operations
+   gsutil iam ch serviceAccount:signed-url@PROJECT_ID.iam.gserviceaccount.com:objectCreator,objectViewer gs://YOUR_BUCKET
    ```
 
-3. Grant service account access to the secret:
+3. Configure Cloud Run service identity:
    ```bash
-   gcloud secrets add-iam-policy-binding signed-url-sa-key \
-     --member=serviceAccount:signed-url@storied-catwalk-476608-d1.iam.gserviceaccount.com \
-     --role=roles/secretmanager.secretAccessor
+   gcloud run services update signed-url-service \
+     --region us-west1 \
+     --service-account=signed-url@PROJECT_ID.iam.gserviceaccount.com
    ```
 
-4. Deploy with secret:
+4. Deploy:
    ```bash
-   gcloud run deploy tag-snap-backend \
-     --image gcr.io/storied-catwalk-476608-d1/tag-snap-backend:latest \
-     --update-secrets=SERVICE_ACCOUNT_KEY_JSON=signed-url-sa-key:latest
+   gcloud run deploy signed-url-service --source . \
+     --region us-west1 \
+     --set-env-vars SERVICE_ACCOUNT_EMAIL=signed-url@PROJECT_ID.iam.gserviceaccount.com,UPLOAD_BUCKET=your-bucket
    ```
 
-### Approach 2: IAM-Based Keyless Signing (In Development)
-Uses the IAM API to sign URLs without storing a private key. More secure but requires additional setup.
+## Critical Implementation Details
 
-**Status:** Requires further implementation — the `google.auth.iam.Signer` API needs specific authorization patterns that are still being tested.
+1. **Signature Encoding:** Signatures must be **hex-encoded** (not base64) in the X-Goog-Signature URL parameter
+   ```python
+   signature_hex = signature_bytes.hex()  # Correct
+   ```
+
+2. **signBlob Response Field:** The IAM API returns signatures in the `signedBlob` field (not `signature`)
+   ```python
+   signature_b64 = response.json()['signedBlob']  # Correct
+   ```
+
+3. **Cloud Run Identity:** The Cloud Run service MUST run as a service account with permission to call signBlob on the target service account
 
 ## IAM Roles Required
 
-Grant the service account:
-- `roles/storage.objectCreator` — write objects to bucket
-- `roles/storage.objectViewer` — read object metadata
-- `roles/iam.serviceAccountTokenCreator` — for IAM-based signing (Approach 2)
+- `roles/iam.serviceAccountTokenCreator` — to call IAM signBlob API
+- `roles/storage.objectCreator` — to write objects to bucket
+- `roles/storage.objectViewer` — to read object metadata
+
 
 ## Cloud Run Deployment (Project: storied-catwalk-476608-d1)
 

@@ -56,17 +56,36 @@ echo ""
 
 # Step 4: Update Cloud Run service with new environment variables
 echo "✅ Step 4: Updating Cloud Run service..."
+
+# Fetch current image
+CURRENT_IMAGE=$(gcloud run services describe "$SERVICE_NAME" \
+  --platform managed \
+  --region "$REGION" \
+  --project "$PROJECT_ID" \
+  --format='value(spec.template.spec.containers[0].image)' \
+  --quiet)
+
+if [ -z "$CURRENT_IMAGE" ]; then
+  echo "❌ Could not find deployed image for service '$SERVICE_NAME' in region '$REGION'"
+  echo "   Make sure the service is deployed and you're in the correct project/region."
+  exit 1
+fi
+
+echo "   Re-deploying with image: $CURRENT_IMAGE"
+
 gcloud run deploy "$SERVICE_NAME" \
   --platform managed \
   --region "$REGION" \
   --project "$PROJECT_ID" \
-  --update-env-vars \
-    SERVICE_ACCOUNT_EMAIL="$SA_EMAIL",\
-    GCP_PROJECT_ID="$PROJECT_ID",\
-    UPLOAD_BUCKET="$BUCKET" \
-  --quiet
+  --image="$CURRENT_IMAGE" \
+  --update-env-vars="SERVICE_ACCOUNT_EMAIL=$SA_EMAIL,GCP_PROJECT_ID=$PROJECT_ID,UPLOAD_BUCKET=$BUCKET" \
+  --no-allow-unauthenticated \
+  --quiet || {
+    echo "❌ Failed to update Cloud Run service"
+    exit 1
+  }
 
-echo "   ✓ Cloud Run service updated with environment variables"
+echo "   Cloud Run service updated successfully"
 echo ""
 
 # Step 5: Verify the deployment
